@@ -10,16 +10,18 @@
 * data augmentation:run the augtest.py
 
 **2、HC Segmentation**
-* the DSVNet2d model
+* the VNet2d model
 
-![](DSVNet2d.png) 
+![](VNet2d.png) 
 
 * train and predict in the script of vnet2d_train.py and vnet2d_predict.py
 
 **3、trained model can download on here:**
 
 ## Result
-
+![](37.bmp)
+![](38.bmp)
+![](32.bmp)
 
 ## Contact
 * https://github.com/junqiangchen
