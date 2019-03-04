@@ -130,7 +130,7 @@ def _create_conv_net(X, image_width, image_height, image_channel, phase, drop_co
                                drop_conv=drop_conv, scope='layer7_3')
     layer7 = resnet_Add(x1=deconv1, x2=layer7)
     # deepspu1
-    output_map1 = upsample2d(x=layer6, scale_factor=16, scope="upsample3d_1")
+    output_map1 = upsample2d(x=layer7, scale_factor=16, scope="upsample3d_1")
     output_map1 = conv_sigmod(x=output_map1, kernalshape=(1, 1, 256, n_class), scope='output_map1')
     # layer9->deconvolution
     deconv2 = deconv_relu_drop(x=layer7, kernalshape=(3, 3, 128, 256), scope='deconv2')
@@ -157,7 +157,7 @@ def _create_conv_net(X, image_width, image_height, image_channel, phase, drop_co
     layer9 = conv_bn_relu_drop(x=layer9, kernalshape=(3, 3, 64, 64), height=H, width=W, phase=phase,
                                drop_conv=drop_conv, scope='layer9_2')
     layer9 = conv_bn_relu_drop(x=layer9, kernalshape=(3, 3, 64, 64), height=H, width=W, phase=phase,
-                               drop_conv=drop_conv, scope='layer9_2')
+                               drop_conv=drop_conv, scope='layer9_3')
     layer9 = resnet_Add(x1=deconv3, x2=layer9)
     # deepspu3
     output_map3 = upsample2d(x=layer9, scale_factor=4, scope="upsample3d_3")
@@ -239,12 +239,16 @@ class DSVnet2dModule(object):
                                                                                                self.phase,
                                                                                                self.drop_conv)
         self.alpha = 1
+        # branch output
         self.cost0 = self.__get_cost(costname, self.Y_gt, self.Y_pred)
         self.cost1 = self.__get_cost(costname, self.Y_gt, self.Y_pred1)
         self.cost2 = self.__get_cost(costname, self.Y_gt, self.Y_pred2)
         self.cost3 = self.__get_cost(costname, self.Y_gt, self.Y_pred3)
         self.cost4 = self.__get_cost(costname, self.Y_gt, self.Y_pred4)
+        # mixed branch
         self.mix_cost = self.__mixed_cost()
+        # loss
+        self.cost = self.cost0 + self.mix_cost
         self.accuracy = -self.__get_cost(costname, self.Y_gt, self.Y_pred)
         if inference:
             init = tf.global_variables_initializer()
@@ -254,7 +258,7 @@ class DSVnet2dModule(object):
             saver.restore(self.sess, model_path)
 
     def __mixed_cost(self):
-        loss = (self.cost1 + self.cost2 + self.cost3 + self.cost4) * self.alpha
+        loss = (self.cost1 + self.cost2 + self.cost3 + self.cost4) / 4. * self.alpha
         return loss
 
     def __get_cost(self, cost_name, Y_gt, Y_pred):
@@ -281,15 +285,15 @@ class DSVnet2dModule(object):
         if not os.path.exists(logs_path + "model\\"):
             os.makedirs(logs_path + "model\\")
         model_path = logs_path + "model\\" + model_name
-        train_op = tf.train.AdamOptimizer(self.lr).minimize(self.cost0 + self.mix_cost)
+        train_op = tf.train.AdamOptimizer(self.lr).minimize(self.cost)
 
         init = tf.global_variables_initializer()
         saver = tf.train.Saver(tf.all_variables(), max_to_keep=10)
 
-        tf.summary.scalar("loss", self.cost0 + self.mix_cost)
+        tf.summary.scalar("loss", self.cost)
         tf.summary.scalar("accuracy", self.accuracy)
         merged_summary_op = tf.summary.merge_all()
-        sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=True))
+        sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False))
         summary_writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
         sess.run(init)
 
@@ -317,7 +321,7 @@ class DSVnet2dModule(object):
             batch_ys = np.multiply(batch_ys, 1.0 / 255.0)
             # check progress on every 1st,2nd,...,10th,20th,...,100th... step
             if i % DISPLAY_STEP == 0 or (i + 1) == train_epochs:
-                train_loss, train_accuracy = sess.run([self.cost0 + self.mix_cost, self.accuracy],
+                train_loss, train_accuracy = sess.run([self.cost, self.accuracy],
                                                       feed_dict={self.X: batch_xs,
                                                                  self.Y_gt: batch_ys,
                                                                  self.lr: learning_rate,
@@ -342,8 +346,156 @@ class DSVnet2dModule(object):
                 print("Model saved in file:", save_path)
                 if i % (DISPLAY_STEP * 10) == 0 and i:
                     DISPLAY_STEP *= 10
-            if i % 100 == 0 and i:
+            if i % 500 == 0 and i:
                 self.alpha = self.alpha * 0.9
+            # train on batch
+            _, summary = sess.run([train_op, merged_summary_op], feed_dict={self.X: batch_xs,
+                                                                            self.Y_gt: batch_ys,
+                                                                            self.lr: learning_rate,
+                                                                            self.phase: 1,
+                                                                            self.drop_conv: dropout_conv})
+            summary_writer.add_summary(summary, i)
+        summary_writer.close()
+        save_path = saver.save(sess, model_path)
+        print("Model saved in file:", save_path)
+
+    def prediction(self, test_images):
+        test_images = test_images.astype(np.float)
+        # convert from [0:255] => [0.0:1.0]
+        test_images = np.multiply(test_images, 1.0 / 255.0)
+        test_images = np.reshape(test_images, (1, test_images.shape[0], test_images.shape[1], 1))
+        pred = self.sess.run(self.Y_pred, feed_dict={self.X: test_images,
+                                                     self.Y_gt: test_images,
+                                                     self.phase: 1,
+                                                     self.drop_conv: 1})
+        result = np.reshape(pred, (test_images.shape[1], test_images.shape[2]))
+        result = result.astype(np.float32) * 255.
+        result = np.clip(result, 0, 255).astype('uint8')
+        return result
+
+
+class Vnet2dModule(object):
+    """
+    A Vnet2d implementation
+
+    :param image_height: number of height in the input image
+    :param image_width: number of width in the input image
+    :param channels: number of channels in the input image
+    :param n_class: number of output labels
+    :param costname: name of the cost function.Default is "cross_entropy"
+    """
+
+    def __init__(self, image_height, image_width, channels=1, inference=False, model_path=None,
+                 costname="dice coefficient"):
+        self.image_width = image_width
+        self.image_height = image_height
+        self.channels = channels
+
+        self.X = tf.placeholder("float", shape=[None, image_height, image_width, channels], name="Input")
+        self.Y_gt = tf.placeholder("float", shape=[None, image_height, image_width, channels], name="Output_GT")
+        self.lr = tf.placeholder('float', name="Learning_rate")
+        self.phase = tf.placeholder(tf.bool, name="Phase")
+        self.drop_conv = tf.placeholder('float', name="DropOut")
+
+        self.Y_pred, _, _, _, _ = _create_conv_net(self.X, self.image_width,
+                                                   self.image_height,
+                                                   self.channels,
+                                                   self.phase,
+                                                   self.drop_conv)
+        self.cost = self.__get_cost(costname, self.Y_gt, self.Y_pred)
+        self.accuracy = -self.__get_cost(costname, self.Y_gt, self.Y_pred)
+        if inference:
+            init = tf.global_variables_initializer()
+            saver = tf.train.Saver()
+            self.sess = tf.InteractiveSession()
+            self.sess.run(init)
+            saver.restore(self.sess, model_path)
+
+    def __get_cost(self, cost_name, Y_gt, Y_pred):
+        H, W, C = Y_gt.get_shape().as_list()[1:]
+        if cost_name == "dice coefficient":
+            smooth = 1e-5
+            pred_flat = tf.reshape(Y_pred, [-1, H * W * C])
+            true_flat = tf.reshape(Y_gt, [-1, H * W * C])
+            intersection = 2 * tf.reduce_sum(pred_flat * true_flat, axis=1) + smooth
+            denominator = tf.reduce_sum(pred_flat, axis=1) + tf.reduce_sum(true_flat, axis=1) + smooth
+            loss = -tf.reduce_mean(intersection / denominator)
+            return loss
+        if cost_name == "pixelwise_cross entroy":
+            assert (C == 1)
+            flat_logit = tf.reshape(Y_pred, [-1])
+            flat_label = tf.reshape(Y_gt, [-1])
+            loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=flat_logit, labels=flat_label))
+            return loss
+
+    def train(self, train_images, train_lanbels, model_name, logs_path, learning_rate,
+              dropout_conv=0.5, train_epochs=10, batch_size=1):
+        if not os.path.exists(logs_path):
+            os.makedirs(logs_path)
+        if not os.path.exists(logs_path + "model\\"):
+            os.makedirs(logs_path + "model\\")
+        model_path = logs_path + "model\\" + model_name
+        train_op = tf.train.AdamOptimizer(self.lr).minimize(self.cost)
+
+        init = tf.global_variables_initializer()
+        saver = tf.train.Saver(tf.all_variables(), max_to_keep=10)
+
+        tf.summary.scalar("loss", self.cost)
+        tf.summary.scalar("accuracy", self.accuracy)
+        merged_summary_op = tf.summary.merge_all()
+        sess = tf.InteractiveSession(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=False))
+        summary_writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
+        sess.run(init)
+
+        DISPLAY_STEP = 1
+        index_in_epoch = 0
+
+        train_epochs = train_images.shape[0] * train_epochs
+        for i in range(train_epochs):
+            # get new batch
+            batch_xs_path, batch_ys_path, index_in_epoch = _next_batch(train_images, train_lanbels, batch_size,
+                                                                       index_in_epoch)
+            batch_xs = np.empty((len(batch_xs_path), self.image_height, self.image_width, self.channels))
+            batch_ys = np.empty((len(batch_ys_path), self.image_height, self.image_width, self.channels))
+
+            for num in range(len(batch_xs_path)):
+                image = cv2.imread(batch_xs_path[num][0], cv2.IMREAD_GRAYSCALE)
+                label = cv2.imread(batch_ys_path[num][0], cv2.IMREAD_GRAYSCALE)
+                batch_xs[num, :, :, :] = np.reshape(image, (self.image_height, self.image_width, self.channels))
+                batch_ys[num, :, :, :] = np.reshape(label, (self.image_height, self.image_width, self.channels))
+            # Extracting images and labels from given data
+            batch_xs = batch_xs.astype(np.float)
+            batch_ys = batch_ys.astype(np.float)
+            # Normalize from [0:255] => [0.0:1.0]
+            batch_xs = np.multiply(batch_xs, 1.0 / 255.0)
+            batch_ys = np.multiply(batch_ys, 1.0 / 255.0)
+            # check progress on every 1st,2nd,...,10th,20th,...,100th... step
+            if i % DISPLAY_STEP == 0 or (i + 1) == train_epochs:
+                train_loss, train_accuracy = sess.run([self.cost, self.accuracy],
+                                                      feed_dict={self.X: batch_xs,
+                                                                 self.Y_gt: batch_ys,
+                                                                 self.lr: learning_rate,
+                                                                 self.phase: 1,
+                                                                 self.drop_conv: dropout_conv})
+                pred = sess.run(self.Y_pred, feed_dict={self.X: batch_xs,
+                                                        self.Y_gt: batch_ys,
+                                                        self.phase: 1,
+                                                        self.drop_conv: 1})
+                result = np.reshape(pred[0], (self.image_height, self.image_width))
+                result = result.astype(np.float32) * 255.
+                result = np.clip(result, 0, 255).astype('uint8')
+                result_path = logs_path + 'result_%d_epoch.png' % (i)
+                cv2.imwrite(result_path, result)
+                true = np.reshape(batch_ys[0], (self.image_height, self.image_width))
+                true = true.astype(np.float32) * 255.
+                true = np.clip(true, 0, 255).astype('uint8')
+                true_path = logs_path + 'src_%d_epoch.png' % (i)
+                cv2.imwrite(true_path, true)
+                print('epochs %d training_loss ,Training_accuracy => %.5f,%.5f ' % (i, train_loss, train_accuracy))
+                save_path = saver.save(sess, model_path, global_step=i)
+                print("Model saved in file:", save_path)
+                if i % (DISPLAY_STEP * 10) == 0 and i:
+                    DISPLAY_STEP *= 10
             # train on batch
             _, summary = sess.run([train_op, merged_summary_op], feed_dict={self.X: batch_xs,
                                                                             self.Y_gt: batch_ys,
