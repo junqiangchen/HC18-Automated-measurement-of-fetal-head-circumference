@@ -26,8 +26,8 @@ def train():
     imagedata = imagedata[perm]
     maskdata = maskdata[perm]
 
-    dsVnet2d = DSVnet2dModule(768, 512, channels=1, costname="dice coefficient")
-    dsVnet2d.train(imagedata, maskdata, "dsVnet2d.pd", "log\\segmeation\\", 0.001, 0.5, 10, 4)
+    Vnet2d = DSVnet2dModule(512, 768, channels=1, costname="dice coefficient")
+    Vnet2d.train(imagedata, maskdata, "dsVnet2d.pd", "log\\dssegmeation\\", 0.001, 0.5, 10, 1)
 
 
 train()
