@@ -16,7 +16,7 @@
 
 * train and predict in the script of vnet2d_train.py and vnet2d_predict.py
 
-**3、trained model can download on here:https://pan.baidu.com/s/1ved3w6Tn4nwnBUDzxW8arw password：r0li **
+**3、trained model can download on here:https://pan.baidu.com/s/1ved3w6Tn4nwnBUDzxW8arw password：r0li**
 
 ## Result
 ![](37.bmp)
