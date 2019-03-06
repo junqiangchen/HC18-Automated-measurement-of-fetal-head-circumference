@@ -19,6 +19,9 @@
 **3、trained model can download on here:https://pan.baidu.com/s/1ved3w6Tn4nwnBUDzxW8arw password：r0li**
 
 ## Result
+* loss and accuracy,orange line is first trained,blue is second trained
+![](loss.PNG)
+![](accu.PNG)
 ![](37.bmp)
 ![](38.bmp)
 ![](32.bmp)
